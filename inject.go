@@ -54,10 +54,14 @@ func Populate(values ...interface{}) error {
 
 // An Object in the Graph.
 type Object struct {
+
 	Value        interface{}
 	Name         string             // Optional
 	Complete     bool               // If true, the Value will be considered complete
+
+	//依赖对象
 	Fields       map[string]*Object // Populated with the field names that were injected and their corresponding *Object.
+
 	reflectType  reflect.Type
 	reflectValue reflect.Value
 	private      bool // If true, the Value will not be used and will only be populated
@@ -75,12 +79,19 @@ func (o *Object) String() string {
 	return buf.String()
 }
 
+//添加依赖
 func (o *Object) addDep(field string, dep *Object) {
 	if o.Fields == nil {
 		o.Fields = make(map[string]*Object)
 	}
 	o.Fields[field] = dep
 }
+
+
+
+
+
+
 
 // The Graph of Objects.
 type Graph struct {
@@ -90,28 +101,22 @@ type Graph struct {
 	named       map[string]*Object
 }
 
-// Provide objects to the Graph. The Object documentation describes
-// the impact of various fields.
+
+// Provide objects to the Graph.
+// The Object documentation describes the impact of various fields.
 func (g *Graph) Provide(objects ...*Object) error {
 	for _, o := range objects {
-		o.reflectType = reflect.TypeOf(o.Value)
+		o.reflectType  = reflect.TypeOf(o.Value)
 		o.reflectValue = reflect.ValueOf(o.Value)
 
 		if o.Fields != nil {
-			return fmt.Errorf(
-				"fields were specified on object %s when it was provided",
-				o,
-			)
+			return fmt.Errorf("fields were specified on object %s when it was provided", o)
 		}
 
+		//匿名依赖对象，根据类型o.reflectType来注册
 		if o.Name == "" {
 			if !isStructPtr(o.reflectType) {
-				return fmt.Errorf(
-					"expected unnamed object value to be a pointer to a struct but got type %s "+
-						"with value %v",
-					o.reflectType,
-					o.Value,
-				)
+				return fmt.Errorf("expected unnamed object value to be a pointer to a struct but got type %s with value %v", o.reflectType, o.Value)
 			}
 
 			if !o.private {
@@ -120,25 +125,24 @@ func (g *Graph) Provide(objects ...*Object) error {
 				}
 
 				if g.unnamedType[o.reflectType] {
-					return fmt.Errorf(
-						"provided two unnamed instances of type *%s.%s",
-						o.reflectType.Elem().PkgPath(), o.reflectType.Elem().Name(),
-					)
+					return fmt.Errorf("provided two unnamed instances of type *%s.%s", o.reflectType.Elem().PkgPath(), o.reflectType.Elem().Name())
 				}
 				g.unnamedType[o.reflectType] = true
 			}
 			g.unnamed = append(g.unnamed, o)
+
+		//非匿名依赖对象，根据类型o.Name来注册
 		} else {
 			if g.named == nil {
 				g.named = make(map[string]*Object)
 			}
-
 			if g.named[o.Name] != nil {
 				return fmt.Errorf("provided two instances named %s", o.Name)
 			}
 			g.named[o.Name] = o
 		}
 
+		//打日志
 		if g.Logger != nil {
 			if o.created {
 				g.Logger.Debugf("created %s", o)
@@ -154,8 +158,10 @@ func (g *Graph) Provide(objects ...*Object) error {
 
 // Populate the incomplete Objects.
 func (g *Graph) Populate() error {
+
+
 	for _, o := range g.named {
-		if o.Complete {
+		if o.Complete {  // If o.Complete is true, the o.Value will be considered complete
 			continue
 		}
 
@@ -164,8 +170,9 @@ func (g *Graph) Populate() error {
 		}
 	}
 
-	// We append and modify our slice as we go along, so we don't use a standard
-	// range loop, and do a single pass thru each object in our graph.
+	// We append and modify our slice as we go along,
+	// so we don't use a standard range loop,
+	// and do a single pass thru each object in our graph.
 	i := 0
 	for {
 		if i == len(g.unnamed) {
@@ -211,11 +218,15 @@ func (g *Graph) Populate() error {
 
 func (g *Graph) populateExplicit(o *Object) error {
 	// Ignore named value types.
+	// 忽略掉命名的、且非结构体指针类型的o。
 	if o.Name != "" && !isStructPtr(o.reflectType) {
 		return nil
 	}
+	//  o.Name == ""  || isStructPtr(o.reflectType)
 
 StructLoop:
+
+	//遍历结构体字段
 	for i := 0; i < o.reflectValue.Elem().NumField(); i++ {
 		field := o.reflectValue.Elem().Field(i)
 		fieldType := field.Type()
@@ -223,12 +234,7 @@ StructLoop:
 		fieldName := o.reflectType.Elem().Field(i).Name
 		tag, err := parseTag(string(fieldTag))
 		if err != nil {
-			return fmt.Errorf(
-				"unexpected tag format `%s` for field %s in type %s",
-				string(fieldTag),
-				o.reflectType.Elem().Field(i).Name,
-				o.reflectType,
-			)
+			return fmt.Errorf("unexpected tag format `%s` for field %s in type %s", string(fieldTag), o.reflectType.Elem().Field(i).Name, o.reflectType)
 		}
 
 		// Skip fields without a tag.
@@ -238,20 +244,12 @@ StructLoop:
 
 		// Cannot be used with unexported fields.
 		if !field.CanSet() {
-			return fmt.Errorf(
-				"inject requested on unexported field %s in type %s",
-				o.reflectType.Elem().Field(i).Name,
-				o.reflectType,
-			)
+			return fmt.Errorf("inject requested on unexported field %s in type %s", o.reflectType.Elem().Field(i).Name, o.reflectType)
 		}
 
 		// Inline tag on anything besides a struct is considered invalid.
 		if tag.Inline && fieldType.Kind() != reflect.Struct {
-			return fmt.Errorf(
-				"inline requested on non inlined field %s in type %s",
-				o.reflectType.Elem().Field(i).Name,
-				o.reflectType,
-			)
+			return fmt.Errorf("inline requested on non inlined field %s in type %s",o.reflectType.Elem().Field(i).Name,o.reflectType)
 		}
 
 		// Don't overwrite existing values.
@@ -262,36 +260,27 @@ StructLoop:
 		// Named injects must have been explicitly provided.
 		if tag.Name != "" {
 			existing := g.named[tag.Name]
+
+			//没有在graph.named[]中找到依赖对象
 			if existing == nil {
-				return fmt.Errorf(
-					"did not find object named %s required by field %s in type %s",
-					tag.Name,
-					o.reflectType.Elem().Field(i).Name,
-					o.reflectType,
-				)
+				return fmt.Errorf("did not find object named %s required by field %s in type %s", tag.Name,o.reflectType.Elem().Field(i).Name, o.reflectType)
 			}
 
+			//类型不兼容，无法执行赋值
 			if !existing.reflectType.AssignableTo(fieldType) {
-				return fmt.Errorf(
-					"object named %s of type %s is not assignable to field %s (%s) in type %s",
-					tag.Name,
-					fieldType,
-					o.reflectType.Elem().Field(i).Name,
-					existing.reflectType,
-					o.reflectType,
-				)
+				return fmt.Errorf("object named %s of type %s is not assignable to field %s (%s) in type %s", tag.Name, fieldType, o.reflectType.Elem().Field(i).Name, existing.reflectType, o.reflectType)
 			}
 
+			//执行注入（设置值）
 			field.Set(reflect.ValueOf(existing.Value))
 			if g.Logger != nil {
-				g.Logger.Debugf(
-					"assigned %s to field %s in %s",
-					existing,
-					o.reflectType.Elem().Field(i).Name,
-					o,
-				)
+				g.Logger.Debugf("assigned %s to field %s in %s", existing, o.reflectType.Elem().Field(i).Name, o)
 			}
+
+			//在graph.Fields[]中添加依赖关系
 			o.addDep(fieldName, existing)
+
+			//处理下一个字段
 			continue StructLoop
 		}
 
@@ -299,26 +288,21 @@ StructLoop:
 		// inject itself. We require an explicit "inline" tag for this to work.
 		if fieldType.Kind() == reflect.Struct {
 			if tag.Private {
-				return fmt.Errorf(
-					"cannot use private inject on inline struct on field %s in type %s",
-					o.reflectType.Elem().Field(i).Name,
-					o.reflectType,
-				)
+				return fmt.Errorf("cannot use private inject on inline struct on field %s in type %s", o.reflectType.Elem().Field(i).Name, o.reflectType)
 			}
 
 			if !tag.Inline {
-				return fmt.Errorf(
-					"inline struct on field %s in type %s requires an explicit \"inline\" tag",
-					o.reflectType.Elem().Field(i).Name,
-					o.reflectType,
-				)
+				return fmt.Errorf("inline struct on field %s in type %s requires an explicit \"inline\" tag", o.reflectType.Elem().Field(i).Name, o.reflectType)
 			}
 
-			err := g.Provide(&Object{
-				Value:    field.Addr().Interface(),
-				private:  true,
-				embedded: o.reflectType.Elem().Field(i).Anonymous,
-			})
+			err := 	g.Provide(
+						&Object{
+							Value: field.Addr().Interface(),
+							private: true,
+							embedded: o.reflectType.Elem().Field(i).Anonymous,
+						},
+					)
+
 			if err != nil {
 				return err
 			}
@@ -333,31 +317,19 @@ StructLoop:
 		// Maps are created and required to be private.
 		if fieldType.Kind() == reflect.Map {
 			if !tag.Private {
-				return fmt.Errorf(
-					"inject on map field %s in type %s must be named or private",
-					o.reflectType.Elem().Field(i).Name,
-					o.reflectType,
-				)
+				return fmt.Errorf("inject on map field %s in type %s must be named or private", o.reflectType.Elem().Field(i).Name, o.reflectType)
 			}
 
 			field.Set(reflect.MakeMap(fieldType))
 			if g.Logger != nil {
-				g.Logger.Debugf(
-					"made map for field %s in %s",
-					o.reflectType.Elem().Field(i).Name,
-					o,
-				)
+				g.Logger.Debugf("made map for field %s in %s", o.reflectType.Elem().Field(i).Name, o)
 			}
 			continue
 		}
 
 		// Can only inject Pointers from here on.
 		if !isStructPtr(fieldType) {
-			return fmt.Errorf(
-				"found inject tag on unsupported field %s in type %s",
-				o.reflectType.Elem().Field(i).Name,
-				o.reflectType,
-			)
+			return fmt.Errorf("found inject tag on unsupported field %s in type %s", o.reflectType.Elem().Field(i).Name, o.reflectType)
 		}
 
 		// Unless it's a private inject, we'll look for an existing instance of the
@@ -370,12 +342,7 @@ StructLoop:
 				if existing.reflectType.AssignableTo(fieldType) {
 					field.Set(reflect.ValueOf(existing.Value))
 					if g.Logger != nil {
-						g.Logger.Debugf(
-							"assigned existing %s to field %s in %s",
-							existing,
-							o.reflectType.Elem().Field(i).Name,
-							o,
-						)
+						g.Logger.Debugf("assigned existing %s to field %s in %s", existing, o.reflectType.Elem().Field(i).Name, o)
 					}
 					o.addDep(fieldName, existing)
 					continue StructLoop
@@ -399,12 +366,7 @@ StructLoop:
 		// Finally assign the newly created object to our field.
 		field.Set(newValue)
 		if g.Logger != nil {
-			g.Logger.Debugf(
-				"assigned newly created %s to field %s in %s",
-				newObject,
-				o.reflectType.Elem().Field(i).Name,
-				o,
-			)
+			g.Logger.Debugf("assigned newly created %s to field %s in %s", newObject, o.reflectType.Elem().Field(i).Name, o)
 		}
 		o.addDep(fieldName, newObject)
 	}
@@ -424,12 +386,7 @@ func (g *Graph) populateUnnamedInterface(o *Object) error {
 		fieldName := o.reflectType.Elem().Field(i).Name
 		tag, err := parseTag(string(fieldTag))
 		if err != nil {
-			return fmt.Errorf(
-				"unexpected tag format `%s` for field %s in type %s",
-				string(fieldTag),
-				o.reflectType.Elem().Field(i).Name,
-				o.reflectType,
-			)
+			return fmt.Errorf("unexpected tag format `%s` for field %s in type %s", string(fieldTag), o.reflectType.Elem().Field(i).Name, o.reflectType)
 		}
 
 		// Skip fields without a tag.
@@ -446,11 +403,7 @@ func (g *Graph) populateUnnamedInterface(o *Object) error {
 		// Interface injection can't be private because we can't instantiate new
 		// instances of an interface.
 		if tag.Private {
-			return fmt.Errorf(
-				"found private inject tag on interface field %s in type %s",
-				o.reflectType.Elem().Field(i).Name,
-				o.reflectType,
-			)
+			return fmt.Errorf("found private inject tag on interface field %s in type %s", o.reflectType.Elem().Field(i).Name, o.reflectType)
 		}
 
 		// Don't overwrite existing values.
@@ -471,26 +424,12 @@ func (g *Graph) populateUnnamedInterface(o *Object) error {
 			}
 			if existing.reflectType.AssignableTo(fieldType) {
 				if found != nil {
-					return fmt.Errorf(
-						"found two assignable values for field %s in type %s. one type "+
-							"%s with value %v and another type %s with value %v",
-						o.reflectType.Elem().Field(i).Name,
-						o.reflectType,
-						found.reflectType,
-						found.Value,
-						existing.reflectType,
-						existing.reflectValue,
-					)
+					return fmt.Errorf("found two assignable values for field %s in type %s. one type %s with value %v and another type %s with value %v", o.reflectType.Elem().Field(i).Name, o.reflectType, found.reflectType, found.Value, existing.reflectType, existing.reflectValue)
 				}
 				found = existing
 				field.Set(reflect.ValueOf(existing.Value))
 				if g.Logger != nil {
-					g.Logger.Debugf(
-						"assigned existing %s to interface field %s in %s",
-						existing,
-						o.reflectType.Elem().Field(i).Name,
-						o,
-					)
+					g.Logger.Debugf("assigned existing %s to interface field %s in %s", existing, o.reflectType.Elem().Field(i).Name, o)
 				}
 				o.addDep(fieldName, existing)
 			}
@@ -498,30 +437,31 @@ func (g *Graph) populateUnnamedInterface(o *Object) error {
 
 		// If we didn't find an assignable value, we're missing something.
 		if found == nil {
-			return fmt.Errorf(
-				"found no assignable value for field %s in type %s",
-				o.reflectType.Elem().Field(i).Name,
-				o.reflectType,
-			)
+			return fmt.Errorf("found no assignable value for field %s in type %s", o.reflectType.Elem().Field(i).Name, o.reflectType)
 		}
 	}
 	return nil
 }
 
-// Objects returns all known objects, named as well as unnamed. The returned
-// elements are not in a stable order.
+// Objects returns all known objects, named as well as unnamed.
+// The returned elements are not in a stable order.
 func (g *Graph) Objects() []*Object {
+
 	objects := make([]*Object, 0, len(g.unnamed)+len(g.named))
 	for _, o := range g.unnamed {
+		//非嵌入
 		if !o.embedded {
 			objects = append(objects, o)
 		}
 	}
+
 	for _, o := range g.named {
+		//非嵌入
 		if !o.embedded {
 			objects = append(objects, o)
 		}
 	}
+
 	// randomize to prevent callers from relying on ordering
 	for i := 0; i < len(objects); i++ {
 		j := rand.Intn(i + 1)
@@ -533,7 +473,7 @@ func (g *Graph) Objects() []*Object {
 var (
 	injectOnly    = &tag{}
 	injectPrivate = &tag{Private: true}
-	injectInline  = &tag{Inline: true}
+	injectInline  = &tag{Inline:  true}
 )
 
 type tag struct {
@@ -542,30 +482,39 @@ type tag struct {
 	Private bool
 }
 
+//解析struct的注解tags
 func parseTag(t string) (*tag, error) {
+	//抽取出字符串t中的tags部分的value
 	found, value, err := structtag.Extract("inject", t)
 	if err != nil {
 		return nil, err
 	}
+	//不注入
 	if !found {
 		return nil, nil
 	}
+	//仅注入
 	if value == "" {
 		return injectOnly, nil
 	}
+	//inline注入
 	if value == "inline" {
 		return injectInline, nil
 	}
+	//私有注入
 	if value == "private" {
 		return injectPrivate, nil
 	}
+	//其他类型注入
 	return &tag{Name: value}, nil
 }
 
+//检查t是否是指向结构体的指针类型
 func isStructPtr(t reflect.Type) bool {
 	return t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Struct
 }
 
+//检查是否是零值（无效值）
 func isNilOrZero(v reflect.Value, t reflect.Type) bool {
 	switch v.Kind() {
 	default:
